@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-moss-vram-profile"
+version = "0.1.0"
+description = "Per-workflow VRAM profile for MOSS-Image in ComfyUI: tune memory_usage_factor to trade resident weights for activation memory, so 3072x3072 fits on an 8 GB card."
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile"
+Documentation = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile#readme"
+"Bug Tracker" = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile/issues"
+
+[tool.comfy]
+PublisherId = "CHANGE_ME"
+DisplayName = "MOSS VRAM Profile"
