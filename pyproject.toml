@@ -1,16 +1,18 @@
 [project]
 name = "comfyui-moss-vram-profile"
 version = "0.2.0"
-description = "Per-workflow VRAM profile for MOSS-Image in ComfyUI: tune memory_usage_factor to trade resident weights for activation memory, so 3072x3072 fits on an 8 GB card."
+description = "Per-workflow VRAM budget for MOSS-Image in ComfyUI: set an absolute GB budget for resident weights so 3072x3072 fits on an 8 GB card."
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile"
-Documentation = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile#readme"
-"Bug Tracker" = "https://github.com/CHANGE_ME/ComfyUI-MossVramProfile/issues"
+Repository = "https://github.com/lingjiu26710/ComfyUI-MossVramProfile"
+Documentation = "https://github.com/lingjiu26710/ComfyUI-MossVramProfile#readme"
+"Bug Tracker" = "https://github.com/lingjiu26710/ComfyUI-MossVramProfile/issues"
 
-[tool.comfy]
-PublisherId = "CHANGE_ME"
-DisplayName = "MOSS VRAM Profile"
+# Registry 发布时再启用这一段（PublisherId 由 comfy-cli node publish 首次发布时生成）。
+# 留着 CHANGE_ME 会让 ComfyUI Manager 的校验报警，所以暂时注释掉。
+# [tool.comfy]
+# PublisherId = "TODO"
+# DisplayName = "MOSS VRAM Profile"
