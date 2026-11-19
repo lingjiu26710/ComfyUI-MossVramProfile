@@ -69,6 +69,21 @@ factor 6.0 (≈ 4.3 GB)    → 1935 MB usable, 1647 MB loaded   → fits
 - Does not touch VAE decode VRAM, which is managed separately.
 - Works on any ComfyUI model (they all have `memory_required()`), but the numbers above are MOSS numbers. A model that already fits in VRAM needs nothing here.
 
+## How this differs from other VRAM tools
+
+| Tool | What it controls | Where it acts |
+| --- | --- | --- |
+| ComfyUI `--reserve-vram` | Headroom kept away from *all* models | Launch flag |
+| [ComfyUI-ReservedVRAM](https://github.com/Windecay/ComfyUI-ReservedVRAM) | The same headroom, adjustable from a node | Per workflow |
+| VRAM Optimizer / cache clearers | Frees cached VRAM between runs | Per queue |
+| **This node** | What a *specific model* declares its activations need | Inside the model instance |
+
+The last row is the difference. `--reserve-vram` and ReservedVRAM both work *outside* the model: they reserve a slice of the card and hope the rest fits. This node overrides `memory_required()` on the model object, which is the number ComfyUI itself uses to compute `lowvram_model_memory`.
+
+That only matters when the declaration is wrong. MOSS declares `memory_usage_factor = 4.0`, which tells ComfyUI to keep roughly 3.1 GB of weights resident on an 8 GB card and leaves too little for activations at 3072×3072. No amount of external reservation fixes a bad declaration — you have to change the declaration.
+
+So: if the problem is "something else on this machine is eating VRAM", use `--reserve-vram` or ReservedVRAM. If the problem is "this model asks for the wrong amount", this node is the inside job.
+
 ---
 
 ## 中文说明
@@ -101,3 +116,9 @@ MOSSImageUNETLoader → MOSS VRAM Profile → ModelSamplingSD3 → … → KSamp
 填大了不会出错，只会变慢：预留越多，权重被赶下 GPU 越早。显存本来就能整装模型的卡，别放这个节点。
 
 **局限**：改的是共享的 model 对象，同一进程里别的 workflow 会继承上一次的值；不涉及 VAE decode 的显存；对任何 ComfyUI 模型都能接，但上面那些数是 MOSS 的数。
+
+**和别的显存工具的区别**：
+
+- `--reserve-vram`（ComfyUI 的启动参数）和 [ComfyUI-ReservedVRAM](https://github.com/Windecay/ComfyUI-ReservedVRAM) 都是在**模型外面**留一块地盘，剩下的指望装得下。
+- 这个节点是在**模型里面**改它自己声明的 `memory_required()`，也就是 ComfyUI 算 `lowvram_model_memory` 用的那个数。
+- 判断标准很简单：别的程序占了显存 → 用 reserve-vram 或 ReservedVRAM；**模型自己报的数不对** → 用这个。MOSS 报 `memory_usage_factor = 4.0` 那份声明，就是报错了，在它外面怎么留地盘都治不了。
