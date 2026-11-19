@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MOSS VRAM Profile: tune MOSS-Image's memory_usage_factor per workflow.
+"""MOSS VRAM Profile: reserve a fixed amount of VRAM for activations.
 
 Why
 ---
@@ -11,24 +11,26 @@ comfy/model_base.py:
 
     reserved_for_activations = latent_area * dtype_size * 0.01 * factor
 
-At 3072x3072 the latent is 192x192, so every +1.0 of factor reserves another
-~0.72 GB for activations.
+The factor is an opaque multiplier, so this node skips it and sets the
+reservation directly, in gigabytes:
 
-    2048  latent 128x128   activations need ~1.3 GB   factor 4.0 reserves 1.3 GB, fits (fast)
-    3072  latent 192x192   activations need ~3.9 GB   factor 4.0 reserves 2.9 GB -> OOM in FFN
-                                                      factor 6.0 reserves 4.3 GB, weights 1.7 GB -> fits
+    MOSS 3072x3072   activations need ~3.9 GB   -> reserve 4.5 GB
+    MOSS 2048x2048   activations need ~1.3 GB   -> reserve 1.5 GB
+    MOSS 1024x1024   activations need ~0.3 GB   -> reserve 0.5 GB
 
-Ceiling: about 8.7 at 3072x3072. Past that the reservation exceeds free VRAM, the
-weights go fully offloaded, and it only gets slower.
+Ceiling is what the card can spare: at 3072x3072 anything past ~4.5 GB just
+forces the weights off the GPU earlier and makes sampling slower.
 
 Usage
 -----
     MOSSImageUNETLoader -> [MOSS VRAM Profile] -> ModelSamplingSD3 -> ... -> KSampler
 
-The node writes the value onto the model instance; `memory_required()` re-reads
-it on every VRAM calculation, so no ComfyUI restart is needed and switching
-workflows takes effect immediately. IS_CHANGED forces the node to run every
-time, otherwise the cached value would win.
+The node replaces the model's `memory_required()` with a fixed budget. ComfyUI
+calls it before every model load and after each step, so no restart is needed
+and switching workflows takes effect immediately. IS_CHANGED forces the node to
+run every time, otherwise a cached result would win.
+
+Set 0 to restore the model's own default.
 
 Note: this mutates the shared model object. Another workflow in the same
 ComfyUI process that does not use this node inherits the last value set.
@@ -41,11 +43,12 @@ class MOSSVramProfile:
         return {
             "required": {
                 "model": ("MODEL",),
-                "memory_factor": ("FLOAT", {
-                    "default": 6.0, "min": 1.0, "max": 10.0, "step": 0.5,
-                    "tooltip": ("VRAM reserved for activations, as a multiple of the "
-                                "MOSS default. 2048px: 4.0 (more resident weights, fast). "
-                                "3072px: 6.0. Ceiling ~8.7 at 3072px, beyond that only slower."),
+                "reserve_gb": ("FLOAT", {
+                    "default": 4.5, "min": 0.0, "max": 16.0, "step": 0.5,
+                    "tooltip": ("VRAM to reserve for activations, in GB. "
+                                "MOSS 3072px: 4.5 | 2048px: 1.5 | 1024px: 0.5. "
+                                "0 = keep the model's own default. "
+                                "Too high only makes it slower, never wrong output."),
                 }),
             },
         }
@@ -54,8 +57,8 @@ class MOSSVramProfile:
     RETURN_NAMES = ("model",)
     FUNCTION = "apply"
     CATEGORY = "MOSS-Image"
-    DESCRIPTION = ("Tune MOSS-Image memory_usage_factor: how much VRAM is reserved for "
-                   "activations, the rest goes to resident weights.")
+    DESCRIPTION = ("Reserve a fixed amount of VRAM for activations, so the weights "
+                   "leave room for them. Bigger renders need more; 0 restores default.")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -63,15 +66,30 @@ class MOSSVramProfile:
         # profile would not switch when a different workflow is queued.
         return float("nan")
 
-    def apply(self, model, memory_factor):
+    def apply(self, model, reserve_gb):
         inner = getattr(model, "model", model)
-        if hasattr(inner, "memory_usage_factor"):
-            old = inner.memory_usage_factor
-            inner.memory_usage_factor = float(memory_factor)
-            print(f"[MOSS VRAM Profile] memory_usage_factor {old} -> {memory_factor}")
-        else:
-            print("[MOSS VRAM Profile] model has no memory_usage_factor, "
-                  "this is not a MOSS-Image model - passing through unchanged")
+        if not hasattr(inner, "memory_required"):
+            print("[MOSS VRAM Profile] model has no memory_required(), "
+                  "not a ComfyUI model - passing through unchanged")
+            return (model,)
+
+        orig = getattr(inner, "_mossvp_orig_memory_required", None)
+        if orig is None:
+            orig = inner.memory_required
+            inner._mossvp_orig_memory_required = orig
+
+        if reserve_gb <= 0:
+            inner.memory_required = orig
+            print("[MOSS VRAM Profile] restored the model's default activation budget")
+            return (model,)
+
+        budget = int(float(reserve_gb) * (1024 ** 3))
+
+        def _fixed_memory_required(input_shape=None, cond_shapes=None):
+            return budget
+
+        inner.memory_required = _fixed_memory_required
+        print(f"[MOSS VRAM Profile] activation reserve -> {reserve_gb:.1f} GB")
         return (model,)
 
 
