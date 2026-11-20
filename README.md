@@ -16,12 +16,14 @@ The split is decided by a multiplier the MOSS plugin declares, `memory_usage_fac
 reserved_for_activations = latent_area * dtype_size * 0.01 * factor
 ```
 
-That multiplier is opaque, and its value differs per model family (MOSS declares 4.0, SDXL declares 0.8). It works at 2048 and falls apart at 3072:
+That multiplier is opaque, and its value differs per model family (MOSS declares 4.0, SDXL declares 0.8). At 3072×3072 it understates the activation requirement, so ComfyUI keeps more weights resident than the remaining VRAM supports:
 
-| Render | Activations actually need | factor 4.0 reserves | Outcome |
+| Render | Activations actually need | factor 4.0 reserves | Effect |
 | --- | --- | --- | --- |
 | 2048×2048 | ~1.3 GB | 1.3 GB | fits, fast |
-| 3072×3072 | ~3.9 GB | 2.9 GB | **OOM inside the FFN, 604 MB short** |
+| 3072×3072 | ~3.9 GB | 2.9 GB | weights and activations compete; on some builds this ends in OOM inside the FFN |
+
+**Measurement note (2026-11-20).** On the current ComfyUI build, 3072×3072 completed without this node in 639 s, so the shortfall above does not always produce a failure. What the node changes is the resident/activation split, and that is where the timing difference in the table further down comes from.
 
 This node drops the multiplier and asks you for the number directly, in GB.
 
@@ -50,12 +52,14 @@ Put it after the model loader and before anything that runs the model.
 
 Too high is never wrong, only slower: a bigger reservation just pushes the weights off the GPU sooner. On a card with enough VRAM for the whole model, leave the node out entirely.
 
-Observed effect on an 8 GB card at 3072×3072, from ComfyUI's own load log:
+Load-log excerpt from an 8 GB card at 3072×3072 (recorded 2026-11-14, on the ComfyUI build of that date):
 
 ```
 factor 4.0 (old default) → 3409 MB usable, 3121 MB loaded   → OOM
 factor 6.0 (≈ 4.3 GB)    → 1935 MB usable, 1647 MB loaded   → fits
 ```
+
+On the build tested on 2026-11-20, the factor 4.0 case completed as well (see the comparison table below); the difference between builds is in how much the loader decides to keep resident, not in the formula.
 
 ## How it works
 
