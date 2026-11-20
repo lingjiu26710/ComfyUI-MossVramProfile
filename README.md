@@ -69,32 +69,46 @@ factor 6.0 (≈ 4.3 GB)    → 1935 MB usable, 1647 MB loaded   → fits
 - Does not touch VAE decode VRAM, which is managed separately.
 - Works on any ComfyUI model (they all have `memory_required()`), but the numbers above are MOSS numbers. A model that already fits in VRAM needs nothing here.
 
-## How this differs from other VRAM tools
+## Comparison with other VRAM controls
 
-| Tool | What it controls | Where it acts |
+Two layers affect how much weight ComfyUI keeps resident in VRAM.
+
+| Mechanism | Layer | Scope |
 | --- | --- | --- |
-| ComfyUI `--reserve-vram` | Headroom kept away from *all* models | Launch flag |
-| [ComfyUI-ReservedVRAM](https://github.com/Windecay/ComfyUI-ReservedVRAM) | The same headroom, adjustable from a node | Per workflow |
-| VRAM Optimizer / cache clearers | Frees cached VRAM between runs | Per queue |
-| **This node** | What a *specific model* declares its activations need | Inside the model instance |
+| `--reserve-vram N` | Global headroom subtracted before model placement | Fixed at process start |
+| [ComfyUI-ReservedVRAM](https://github.com/Windecay/ComfyUI-ReservedVRAM) | The same headroom, exposed as a node | Per workflow |
+| **This node** | Overrides `memory_required()` on a model instance | Per model, per execution |
 
-The last row is the difference. `--reserve-vram` and ReservedVRAM both work *outside* the model: they reserve a slice of the card and hope the rest fits. This node overrides `memory_required()` on the model object, which is the number ComfyUI itself uses to compute `lowvram_model_memory`.
+Both approaches reduce resident weight and leave more room for activations. They differ in where the value is stored:
 
-That only matters when the declaration is wrong. MOSS declares `memory_usage_factor = 4.0`, which tells ComfyUI to keep roughly 3.1 GB of weights resident on an 8 GB card and leaves too little for activations at 3072×3072. No amount of external reservation fixes a bad declaration — you have to change the declaration.
+- `--reserve-vram` is a process-level constant. Changing it requires restarting ComfyUI.
+- This node sets the value per execution. One session can run 1024×1024 and then 3072×3072 without a restart.
 
-So: if the problem is "something else on this machine is eating VRAM", use `--reserve-vram` or ReservedVRAM. If the problem is "this model asks for the wrong amount", this node is the inside job.
+### Measured
+
+MOSS-Image bf16, 3072×3072, 6 steps, one seed, RTX 5060 Laptop 8 GB. Each run started from a fresh ComfyUI process.
+
+| Configuration | Result | Time |
+| --- | --- | --- |
+| Default, no node | success | 639 s |
+| `--reserve-vram 4.5` | success | 499 s |
+| This node, `reserve_gb = 4.5` | success | 490 s |
+
+All three completed. The latter two are 22% and 23% faster than default; the 9 s gap between them is within run-to-run variation. On this configuration the two mechanisms are equivalent for throughput.
+
+The node's advantage is granularity, not capability. Use it when a workflow needs different budgets at different resolutions. Use `--reserve-vram` when one fixed headroom is sufficient.
 
 ---
 
 ## 中文说明
 
-MOSS-Image 的权重 bf16 大约 10 GB，8G 卡装不下。ComfyUI 会把一部分权重常驻在显存里（省得每步重传），剩下的留给激活。留多少由 MOSS 插件声明的 `memory_usage_factor = 4.0` 这个倍数决定：
+MOSS-Image 的 bf16 权重约 10 GB，超过单卡 8 GB 的可用显存。ComfyUI 会将部分权重常驻在显存中，以减少每步的数据搬运，剩余空间留给激活。常驻比例由 MOSS 插件声明的 `memory_usage_factor = 4.0` 决定：
 
 ```
 给激活预留 = latent 面积 × 每像素字节 × 0.01 × factor
 ```
 
-倍数太绕，而且每个模型的默认值不一样（MOSS 是 4.0，SDXL 是 0.8）。这个节点直接问你要多少 GB。
+该系数不易直接换算为显存用量，且各模型的默认值不同（MOSS 为 4.0，SDXL 为 0.8）。本节点直接以 GB 为单位指定数值。
 
 **安装**：整个目录拷进 `ComfyUI/custom_nodes/`，重启。需要已装 `comfyui-moss-Image`，无 pip 依赖。
 
@@ -113,12 +127,30 @@ MOSSImageUNETLoader → MOSS VRAM Profile → ModelSamplingSD3 → … → KSamp
 | 3072×3072 | 4.5（8G 卡实测 30 步约 30 分钟） |
 | 任意 | 0 = 恢复模型自己的默认值 |
 
-填大了不会出错，只会变慢：预留越多，权重被赶下 GPU 越早。显存本来就能整装模型的卡，别放这个节点。
+数值偏大不会导致失败，但会提高权重换出 GPU 的频率，降低速度。显存足以完整加载模型时，无需添加本节点。
 
 **局限**：改的是共享的 model 对象，同一进程里别的 workflow 会继承上一次的值；不涉及 VAE decode 的显存；对任何 ComfyUI 模型都能接，但上面那些数是 MOSS 的数。
 
-**和别的显存工具的区别**：
+**与其它显存控制方式的比较**：
 
-- `--reserve-vram`（ComfyUI 的启动参数）和 [ComfyUI-ReservedVRAM](https://github.com/Windecay/ComfyUI-ReservedVRAM) 都是在**模型外面**留一块地盘，剩下的指望装得下。
-- 这个节点是在**模型里面**改它自己声明的 `memory_required()`，也就是 ComfyUI 算 `lowvram_model_memory` 用的那个数。
-- 判断标准很简单：别的程序占了显存 → 用 reserve-vram 或 ReservedVRAM；**模型自己报的数不对** → 用这个。MOSS 报 `memory_usage_factor = 4.0` 那份声明，就是报错了，在它外面怎么留地盘都治不了。
+ComfyUI 中有两个层级的手段可以影响权重常驻量，作用位置不同：
+
+| 方式 | 作用位置 | 生效范围 |
+| --- | --- | --- |
+| `--reserve-vram N` | 模型加载前扣除的全局余量 | 进程启动时固定 |
+| ComfyUI-ReservedVRAM | 同一余量，以节点形式提供 | 每个工作流 |
+| **本节点** | 覆盖模型实例的 `memory_required()` | 每个模型、每次执行 |
+
+两者都能降低权重常驻量、为激活腾出空间。区别在于数值存放在哪里：`--reserve-vram` 是进程级常量，修改需要重启 ComfyUI；本节点按次设置，同一会话可以先跑 1024×1024 再跑 3072×3072，不需要重启。
+
+**实测**（MOSS-Image bf16，3072×3072，6 步，同一 seed，RTX 5060 Laptop 8 GB，每组从新进程启动）：
+
+| 配置 | 结果 | 耗时 |
+| --- | --- | --- |
+| 默认，不接节点 | 成功 | 639 秒 |
+| `--reserve-vram 4.5` | 成功 | 499 秒 |
+| 本节点，`reserve_gb = 4.5` | 成功 | 490 秒 |
+
+三种配置均完成出图。后两种比默认快 22% 和 23%，彼此相差 9 秒，在运行波动范围内。在这套配置上，两种方式对吞吐量的影响相当。
+
+本节点的优势是粒度，不是能力：同一工作流需要在不同分辨率下使用不同预算时用它；只需要一个固定的全局余量时用 `--reserve-vram`。
