@@ -96,7 +96,7 @@ MOSS-Image bf16, 3072×3072, 6 steps, one seed, RTX 5060 Laptop 8 GB. Each run s
 
 All three completed. The latter two are 22% and 23% faster than default; the 9 s gap between them is within run-to-run variation. On this configuration the two mechanisms are equivalent for throughput.
 
-The node's advantage is granularity, not capability. Use it when a workflow needs different budgets at different resolutions. Use `--reserve-vram` when one fixed headroom is sufficient.
+Choose by workflow: use `--reserve-vram` when one fixed headroom covers every run; add this node when the same session needs different budgets at different resolutions.
 
 ---
 
@@ -153,4 +153,4 @@ ComfyUI 中有两个层级的手段可以影响权重常驻量，作用位置不
 
 三种配置均完成出图。后两种比默认快 22% 和 23%，彼此相差 9 秒，在运行波动范围内。在这套配置上，两种方式对吞吐量的影响相当。
 
-本节点的优势是粒度，不是能力：同一工作流需要在不同分辨率下使用不同预算时用它；只需要一个固定的全局余量时用 `--reserve-vram`。
+按工作流选择：每次运行的显存预算固定时，用 `--reserve-vram`；同一会话需要在不同分辨率下切换预算时，加本节点。
